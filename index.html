@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Secret Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        /* Стили */
+        body { background: #0f0f0f; color: #fff; font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+        #login-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 15px; background: #1a1a1a; }
+        #login-screen input { width: 80%; max-width: 300px; padding: 12px; border-radius: 8px; border: none; background: #2a2a2a; color: #fff; font-size: 16px; outline: none; }
+        #login-screen button { background: #8774e1; color: #fff; border: none; padding: 12px 24px; border-radius: 8px; font-size: 16px; cursor: pointer; }
+        
+        #chat-screen { display: none; flex-direction: column; height: 100%; }
+        #messages { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { max-width: 75%; padding: 10px 14px; border-radius: 12px; word-wrap: break-word; font-size: 15px; line-height: 1.4; }
+        .msg.own { align-self: flex-end; background: #8774e1; border-bottom-right-radius: 4px; }
+        .msg.other { align-self: flex-start; background: #212121; border-bottom-left-radius: 4px; }
+        .msg-author { font-size: 12px; opacity: 0.7; margin-bottom: 4px; display: block; }
+        
+        #input-area { display: flex; padding: 10px; background: #1a1a1a; gap: 10px; align-items: center; }
+        #input-area input[type="text"] { flex: 1; padding: 12px 15px; border-radius: 20px; border: none; background: #2a2a2a; color: #fff; font-size: 16px; outline: none; }
+        .btn-icon { background: none; border: none; color: #8774e1; font-size: 24px; cursor: pointer; padding: 0 5px; }
+        .img-preview { max-width: 100%; border-radius: 8px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div id="login-screen">
+    <h2>ВхРд в чат</h2>
+    <input type="text" id="username" placeholder="ТвРё имя">
+    <input type="password" id="seed" placeholder="Сид-фраза (ключ)">
+    <button onclick="login()">ВРйти</button>
+</div>
+
+<div id="chat-screen">
+    <div id="messages"></div>
+    <div id="input-area">
+        <input type="file" id="file-input" style="display:none" onchange="handleFile()">
+        <button class="btn-icon" onclick="document.getElementById('file-input').click()">📎</button>
+        <input type="text" id="msg-input" placeholder="СРРбщение..." onkeypress="handleEnter(event)">
+        <button class="btn-icon" onclick="sendMsg()">➤</button>
+    </div>
+</div>
+
+<script>
+    // КРнстанты для Gist API
+    const GITHUB_TOKEN = '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'; 
+    const GIST_ID = '29eaba2c12400a5c8738e184a8b15df8'; 
+
+    let currentUser = '';
+    let currentSeed = '';
+    let lastContent = '';
+
+    function login() {
+        currentUser = document.getElementById('username').value.trim();
+        currentSeed = document.getElementById('seed').value;
+        if (!currentUser || !currentSeed) return alert('Введите все данные!');
+        
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('chat-screen').style.display = 'flex';
+        
+        fetchMessages();
+        setInterval(fetchMessages, 3000); // ПРллинг каждые 3 секунды
+    }
+
+    async function fetchMessages() {
+        try {
+            const res = await fetch(`https://api.github.com/gists/${GIST_ID}?t=${Date.now()}`, {
+                headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}` }
+            });
+            const data = await res.json();
+            const content = data.files['chat.json'].content;
+
+            if (content !== lastContent) {
+                lastContent = content;
+                renderMessages(content);
+            }
+        } catch (e) {
+            console.error('Ршибка загрузки:', e);
+        }
+    }
+
+    function renderMessages(encryptedContent) {
+        const msgContainer = document.getElementById('messages');
+        msgContainer.innerHTML = '';
+        
+        if (!encryptedContent) return;
+
+        try {
+            const bytes = CryptoJS.AES.decrypt(encryptedContent, currentSeed);
+            const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+            if (!decryptedStr) throw new Error('Bad key');
+            
+            const messages = JSON.parse(decryptedStr);
+
+            messages.forEach(m => {
+                const div = document.createElement('div');
+                div.className = `msg ${m.user === currentUser ? 'own' : 'other'}`;
+                
+                let html = `<span class="msg-author">${m.user}</span>`;
+                if (m.text) html += `<div>${m.text}</div>`;
+                if (m.file) {
+                    if (m.file.startsWith('data:image')) {
+                        html += `<img src="${m.file}" class="img-preview">`;
+                    } else {
+                        html += `<a href="${m.file}" download="file" style="color:#8774e1;">📁 Скачать файл</a>`;
+                    }
+                }
+                div.innerHTML = html;
+                msgContainer.appendChild(div);
+            });
+            msgContainer.scrollTop = msgContainer.scrollHeight; // АвтРскрРлл
+        } catch (e) {
+            msgContainer.innerHTML = '<div style="color:#ff6b6b; text-align:center; padding:20px;">Ршибка расшифрРвки. Неверная сид-фраза!</div>';
+        }
+    }
+
+    async function sendData(newMsgObj) {
+        try {
+            // Сначала пРлучаем актуальные данные, чтРбы не затереть чужие сРРбщения
+            const res = await fetch(`https://api.github.com/gists/${GIST_ID}?t=${Date.now()}`, {
+                headers: { 'Authorization': `Bearer ${GITHUB_TOKEN}` }
+            });
+            const data = await res.json();
+            const encryptedContent = data.files['chat.json'] ? data.files['chat.json'].content : '';
+
+            let messages = [];
+            if (encryptedContent) {
+                try {
+                    const bytes = CryptoJS.AES.decrypt(encryptedContent, currentSeed);
+                    const decryptedStr = bytes.toString(CryptoJS.enc.Utf8);
+                    if (decryptedStr) messages = JSON.parse(decryptedStr);
+                } catch (e) {
+                    console.log('Начинаем нРвую истРрию чата');
+                }
+            }
+
+            messages.push(newMsgObj);
+            
+            // Шифруем весь массив
+            const newEncrypted = CryptoJS.AES.encrypt(JSON.stringify(messages), currentSeed).toString();
+
+            // Ртправляем PATCH запрРс
+            await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `Bearer ${GITHUB_TOKEN}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    files: { 'chat.json': { content: newEncrypted } }
+                })
+            });
+            
+            fetchMessages();
+        } catch (e) {
+            alert('Ршибка Ртправки сРРбщения!');
+            console.error(e);
+        }
+    }
+
+    function sendMsg() {
+        const input = document.getElementById('msg-input');
+        const text = input.value.trim();
+        if (!text) return;
+        
+        input.value = '';
+        sendData({ user: currentUser, text: text, timestamp: Date.now() });
+    }
+
+    function handleEnter(e) {
+        if (e.key === 'Enter') sendMsg();
+    }
+
+    function handleFile() {
+        const file = document.getElementById('file-input').files[0];
+        if (!file) return;
+        
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const base64 = e.target.result;
+            sendData({ user: currentUser, file: base64, timestamp: Date.now() });
+        };
+        reader.readAsDataURL(file);
+    }
+</script>
+</body>
+</html>
